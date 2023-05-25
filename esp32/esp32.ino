@@ -1,20 +1,24 @@
 // Auto watering script for esp32 board.
+#include <Preferences.h>
 
 // Pin definitions
 #define WATER_SENS 26 // Water sensor
 #define VALVE_PIN 32 // Valve pin
 
-// global constants
+// Global constants
 #define WATER_SENS_GATE 2000 // Water sensor threshold, defines when water level is low & high
 #define WATER_FLOW 12 // Defines how much units of water flows out in 1 sec of open valve
 #define DAY 60000000 // Day in millis (minute for now)
 #define SEC 1000000 // Second in millis
 
-// global  variables
-int days_left = 30; // days to go, used to distrube water evenly across days
-int water_tank = 4000; // defines amount of water in the tank 
-int daily_limit = 0; // defines how much water can be used every day
-bool water_low; // holds info from the water sensor
+Preferences preferences;
+
+// Global variables
+int days_left = 30; // Days to go, used to distrube water evenly across days
+int water_tank = 4000; // Defines amount of water in the tank 
+int daily_limit = 0; // Defines how much water can be used every day
+short water_level = 0; // Holds value read from water level sensor
+
 
 // Function that calculates daily limit of water usage
 // Returns water tank when there is no days left
@@ -38,10 +42,14 @@ void valve_handle()
   Serial.print(water_tank);
   Serial.print("  limit today: ");
   Serial.print(daily_limit);
+  Serial.print("  water level: ");
+  Serial.print(water_level);
   Serial.println("");
 
-  // check if valve should be opened
-  // this is when water is low and daily limit allows for it
+  bool water_low = water_level < WATER_SENS_GATE;
+
+  // Check if valve should be opened
+  // This is when water is low and daily limit allows for it
   if (water_low && daily_limit >= WATER_FLOW) 
   {
 
@@ -52,6 +60,8 @@ void valve_handle()
     // subtract water 
     water_tank -= WATER_FLOW;
     daily_limit -= WATER_FLOW;
+
+    preferences.putInt("tank", water_tank);
     
     return;
   }
@@ -67,10 +77,18 @@ void day_update()
   days_left--;
   daily_limit = calc_daily_limit(water_tank, days_left);
 
+  preferences.putInt("days", days_left);
+
   Serial.println("");
   Serial.println("-- a day has passed --");
   Serial.println("");
   
+}
+
+// Function that reads water level from sensor
+void do_water_level_reading()
+{
+  water_level = analogRead(WATER_SENS);
 }
 
 
@@ -99,8 +117,13 @@ void IRAM_ATTR on_day_timer()
 
 void setup() {
   Serial.begin(9600);
+  preferences.begin("stats", false); 
 
-  // Set Water sensor pin to input
+  // Read values from preferences
+  days_left = preferences.getInt("days", days_left);
+  water_tank = preferences.getInt("tank", water_tank);
+
+  // Set pin modes
   pinMode(WATER_SENS, INPUT);
   pinMode(VALVE_PIN, OUTPUT);
 
@@ -127,24 +150,19 @@ void setup() {
   timerAlarmEnable(valve_timer);
   timerAlarmEnable(day_timer);
 
-  //initialize day 0
-  day_update();
 }
 
-void loop() {
-
-  // read and update water level status
-  water_low = (analogRead(WATER_SENS) < WATER_SENS_GATE);
-
-
-  //if second has passed, handle water valve
+void loop() 
+{
+  // If second has passed, handle water valve
   if (xSemaphoreTake(valve_timer_semaphore, 0) == pdTRUE)
   {
+    do_water_level_reading();
     valve_handle(); 
   }
 
 
-  //if day has passed, do daily update
+  // If day has passed, do daily update
   if (xSemaphoreTake(day_timer_semaphore, 0) == pdTRUE)
   {
     day_update();
